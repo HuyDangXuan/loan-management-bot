@@ -26,6 +26,13 @@ function getOptionValue(options: any[] | undefined, name: string) {
   return found?.value ?? "";
 }
 
+export async function GET() {
+  return Response.json({
+    ok: true,
+    message: "Discord endpoint is running. Use POST for interactions."
+  });
+}
+
 export async function POST(req: Request) {
   const signature = req.headers.get("X-Signature-Ed25519") || "";
   const timestamp = req.headers.get("X-Signature-Timestamp") || "";
