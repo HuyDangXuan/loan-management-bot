@@ -1,6 +1,6 @@
 import {
   computeAllRoomSettlement,
-  computeRecipientCreditSettlement,
+  computeDebtTransferSettlement,
   createEmptyBalances,
 } from "./expenseSettlement";
 import {
@@ -13,10 +13,7 @@ import {
   inferExpenseSheetIntent,
   type ExpenseSheetIntent,
 } from "./expenseSheetIntent";
-import {
-  hasDebtTransferCue,
-  parseDebtTransferMessage,
-} from "./parseDebtTransferMessage";
+import { type DebtTransferEntryType, hasDebtTransferCue, parseDebtTransferMessage } from "./parseDebtTransferMessage";
 import { parseExpenseMessage } from "./parseExpenseMessage";
 import { resolveRoomMemberName } from "./roomConfig";
 
@@ -30,25 +27,102 @@ export type DiscordExpenseSheetMessageInput = {
   discordDisplayName: string | null;
 };
 
-function buildNoopIntent(
-  reason: string,
-  overrides: Partial<ExpenseSheetIntent> = {}
-): ExpenseSheetIntent {
-  return {
-    action: "noop",
-    entryType: "expense",
-    rowNumber: null,
-    amount: null,
-    item: null,
-    payerName: null,
-    fromMember: null,
-    toMember: null,
-    splitMode: "none",
-    participantCount: null,
-    note: null,
-    reason,
-    ...overrides,
-  };
+function formatCurrency(amount: number) {
+  return `${new Intl.NumberFormat("vi-VN").format(amount)}d`;
+}
+
+function formatSignedCurrency(amount: number) {
+  const sign = amount >= 0 ? "+" : "-";
+  return `${sign}${formatCurrency(Math.abs(amount))}`;
+}
+
+function formatBalanceSummary(balances: Record<string, number | null>) {
+  const parts = Object.entries(balances)
+    .filter(([, amount]) => amount != null)
+    .map(([member, amount]) => `${member} ${formatSignedCurrency(amount as number)}`);
+
+  return parts.length ? `Can doi: ${parts.join(", ")}.` : null;
+}
+
+function appendBalanceSummary(message: string, balances: Record<string, number | null>) {
+  const summary = formatBalanceSummary(balances);
+  return summary ? `${message}\n${summary}` : message;
+}
+
+function normalizeReason(reason: string) {
+  return /[.!?]$/.test(reason) ? reason : `${reason}.`;
+}
+
+function formatDebtValidationMessage(reason: string) {
+  const prefix = "Lenh cong no/tra no ";
+  const detail = reason.startsWith(prefix)
+    ? `${reason.slice(prefix.length, prefix.length + 1).toLowerCase()}${reason.slice(
+        prefix.length + 1
+      )}`
+    : `${reason.slice(0, 1).toLowerCase()}${reason.slice(1)}`;
+
+  return `Khong xu ly duoc lenh cong no/tra no: ${normalizeReason(detail)}`;
+}
+
+function resolvePreferredPayerName(
+  members: string[],
+  intentPayerName: string | null,
+  displayName: string | null,
+  username: string
+) {
+  if (members.length) {
+    return (
+      resolveRoomMemberName(members, intentPayerName) ??
+      resolveRoomMemberName(members, displayName) ??
+      resolveRoomMemberName(members, username)
+    );
+  }
+
+  return intentPayerName ?? displayName ?? username;
+}
+
+function buildSetupGuidance() {
+  return 'Can cau hinh phong truoc khi chia tien. Dung /start so_nguoi:<n> thanh_vien:"Huy, Lan, Minh".';
+}
+
+function buildExpenseSuccessMessage(
+  item: string,
+  amount: number,
+  wantsRoomSplit: boolean,
+  balances: Record<string, number | null>,
+  action: "add" | "update",
+  rowNumber?: number
+) {
+  const base =
+    action === "add"
+      ? wantsRoomSplit
+        ? `Da ghi chi tieu "${item}" ${formatCurrency(amount)} cho ca phong.`
+        : `Da ghi chi tieu "${item}" ${formatCurrency(amount)}.`
+      : wantsRoomSplit
+        ? `Da cap nhat dong ${rowNumber} voi chi tieu "${item}" ${formatCurrency(amount)} cho ca phong.`
+        : `Da cap nhat dong ${rowNumber} voi chi tieu "${item}" ${formatCurrency(amount)}.`;
+
+  return appendBalanceSummary(base, balances);
+}
+
+function buildDebtSuccessMessage(
+  entryType: DebtTransferEntryType,
+  fromMember: string,
+  toMember: string,
+  amount: number,
+  balances: Record<string, number | null>,
+  action: "add" | "update",
+  rowNumber?: number
+) {
+  const actionText = entryType === "debt" ? "no" : "tra";
+  const lead =
+    action === "add"
+      ? entryType === "debt"
+        ? `Da ghi cong no: ${fromMember} ${actionText} ${toMember} ${formatCurrency(amount)}.`
+        : `Da ghi tra no: ${fromMember} ${actionText} ${toMember} ${formatCurrency(amount)}.`
+      : `Da cap nhat dong ${rowNumber}: ${fromMember} ${actionText} ${toMember} ${formatCurrency(amount)}.`;
+
+  return appendBalanceSummary(lead, balances);
 }
 
 export function shouldAttemptExpenseAction(content: string) {
@@ -100,41 +174,6 @@ function hasRoomWideSplitCue(content: string) {
   );
 }
 
-function formatIntentJson(intent: ExpenseSheetIntent) {
-  return `\`\`\`json\n${JSON.stringify(intent, null, 2)}\n\`\`\``;
-}
-
-function formatBalances(balances: Record<string, number | null>) {
-  const parts = Object.entries(balances)
-    .filter(([, amount]) => amount != null)
-    .map(([member, amount]) => `${member}: ${amount}`);
-
-  return parts.length ? parts.join(", ") : null;
-}
-
-function resolvePreferredPayerName(
-  members: string[],
-  intentPayerName: string | null,
-  displayName: string | null,
-  username: string
-) {
-  if (members.length) {
-    return (
-      resolveRoomMemberName(members, intentPayerName) ??
-      resolveRoomMemberName(members, displayName) ??
-      resolveRoomMemberName(members, username)
-    );
-  }
-
-  return intentPayerName ?? displayName ?? username;
-}
-
-function buildSetupGuidance() {
-  return (
-    'Can cau hinh phong truoc khi chia tien. Dung /start so_nguoi:<n> thanh_vien:"Huy, Lan, Minh".'
-  );
-}
-
 export async function getDiscordExpenseSheetReplyContent(
   input: DiscordExpenseSheetMessageInput
 ): Promise<string | null> {
@@ -158,11 +197,7 @@ export async function getDiscordExpenseSheetReplyContent(
   const parsedDebtTransfer = parseDebtTransferMessage(content, roomMembers);
 
   if (parsedDebtTransfer?.kind === "invalid") {
-    return `Khong xu ly duoc lenh nay.\n${formatIntentJson(
-      buildNoopIntent(parsedDebtTransfer.reason, {
-        entryType: parsedDebtTransfer.entryType,
-      })
-    )}`;
+    return formatDebtValidationMessage(parsedDebtTransfer.reason);
   }
 
   const matchedDebtTransfer =
@@ -202,19 +237,17 @@ export async function getDiscordExpenseSheetReplyContent(
     }
 
     return effectiveIntent.reason
-      ? `Khong xu ly duoc lenh nay.\n${formatIntentJson(effectiveIntent)}`
-      : null;
+      ? `Khong xu ly duoc lenh nay: ${normalizeReason(effectiveIntent.reason)}`
+      : "Khong xu ly duoc lenh nay.";
   }
 
   if (effectiveIntent.action === "delete") {
     if (!effectiveIntent.rowNumber) {
-      return `Can chi ro dong can xoa.\n${formatIntentJson(effectiveIntent)}`;
+      return "Can chi ro dong can xoa.";
     }
 
     const result = await deleteLedgerRow(effectiveIntent.rowNumber);
-    return `Da xoa dong ${result.rowNumber} trong sheet "${result.sheetName}".\n${formatIntentJson(
-      effectiveIntent
-    )}`;
+    return `Da xoa dong ${result.rowNumber} trong sheet "${result.sheetName}".`;
   }
 
   if (
@@ -228,19 +261,17 @@ export async function getDiscordExpenseSheetReplyContent(
     const toMember = resolveRoomMemberName(roomMembers, effectiveIntent.toMember);
 
     if (!effectiveIntent.amount || !fromMember || !toMember || fromMember === toMember) {
-      const invalidDebtIntent = {
-        ...effectiveIntent,
-        action: "noop" as const,
-        reason: "Lenh cong no/tra no phai ghi ro 2 thanh vien trong room.",
-      };
-
-      return `Khong xu ly duoc lenh nay.\n${formatIntentJson(invalidDebtIntent)}`;
+      return formatDebtValidationMessage(
+        "Lenh cong no/tra no phai ghi ro 2 thanh vien trong room."
+      );
     }
 
-    const settlement = computeRecipientCreditSettlement(
+    const settlement = computeDebtTransferSettlement(
       roomMembers,
+      fromMember,
       toMember,
-      effectiveIntent.amount
+      effectiveIntent.amount,
+      effectiveIntent.entryType
     );
     const rowInput = {
       action: (effectiveIntent.action === "update" ? "update" : "add") as
@@ -256,32 +287,35 @@ export async function getDiscordExpenseSheetReplyContent(
     };
 
     if (effectiveIntent.action === "add") {
-      const result = await appendLedgerRow(rowInput, roomMembers);
-      const balanceSummary = formatBalances(settlement.balances);
-      return `Da them dong ${result.rowNumber} vao sheet "${result.sheetName}".${
-        balanceSummary ? `\nSettlement: ${balanceSummary}` : ""
-      }\n${formatIntentJson(effectiveIntent)}`;
+      await appendLedgerRow(rowInput, roomMembers);
+      return buildDebtSuccessMessage(
+        effectiveIntent.entryType,
+        fromMember,
+        toMember,
+        effectiveIntent.amount,
+        settlement.balances,
+        "add"
+      );
     }
 
     if (!effectiveIntent.rowNumber) {
-      return `Can chi ro dong can sua.\n${formatIntentJson(effectiveIntent)}`;
+      return "Can chi ro dong can sua.";
     }
 
-    const result = await updateLedgerRow(
-      effectiveIntent.rowNumber,
-      rowInput,
-      roomMembers
+    await updateLedgerRow(effectiveIntent.rowNumber, rowInput, roomMembers);
+    return buildDebtSuccessMessage(
+      effectiveIntent.entryType,
+      fromMember,
+      toMember,
+      effectiveIntent.amount,
+      settlement.balances,
+      "update",
+      effectiveIntent.rowNumber
     );
-    const balanceSummary = formatBalances(settlement.balances);
-    return `Da cap nhat dong ${result.rowNumber} trong sheet "${result.sheetName}".${
-      balanceSummary ? `\nSettlement: ${balanceSummary}` : ""
-    }\n${formatIntentJson(effectiveIntent)}`;
   }
 
   if (!effectiveIntent.amount || !effectiveIntent.item) {
-    return `Thieu du lieu amount/item de ghi vao sheet.\n${formatIntentJson(
-      effectiveIntent
-    )}`;
+    return "Chua du du lieu so tien hoac noi dung chi tieu.";
   }
 
   const wantsRoomSplit = effectiveIntent.splitMode === "all_room" || localSplitCue;
@@ -295,9 +329,7 @@ export async function getDiscordExpenseSheetReplyContent(
     effectiveIntent.participantCount &&
     effectiveIntent.participantCount !== roomMembers.length
   ) {
-    return `Cau lenh chia tien chua ro rang voi phong hien tai.\n${formatIntentJson(
-      effectiveIntent
-    )}`;
+    return "Cau lenh chia tien chua ro rang voi phong hien tai.";
   }
 
   const paidBy = resolvePreferredPayerName(
@@ -308,9 +340,7 @@ export async function getDiscordExpenseSheetReplyContent(
   );
 
   if (wantsRoomSplit && !paidBy) {
-    return `Khong xac dinh duoc ai la nguoi tra tien.\n${formatIntentJson(
-      effectiveIntent
-    )}`;
+    return "Khong xac dinh duoc ai la nguoi tra tien.";
   }
 
   const settlement = wantsRoomSplit
@@ -338,24 +368,27 @@ export async function getDiscordExpenseSheetReplyContent(
   };
 
   if (effectiveIntent.action === "add") {
-    const result = await appendLedgerRow(rowInput, roomMembers);
-    const balanceSummary = formatBalances(settlement.balances);
-    return `Da them dong ${result.rowNumber} vao sheet "${result.sheetName}".${
-      balanceSummary ? `\nSettlement: ${balanceSummary}` : ""
-    }\n${formatIntentJson(effectiveIntent)}`;
+    await appendLedgerRow(rowInput, roomMembers);
+    return buildExpenseSuccessMessage(
+      effectiveIntent.item,
+      effectiveIntent.amount,
+      wantsRoomSplit,
+      settlement.balances,
+      "add"
+    );
   }
 
   if (!effectiveIntent.rowNumber) {
-    return `Can chi ro dong can sua.\n${formatIntentJson(effectiveIntent)}`;
+    return "Can chi ro dong can sua.";
   }
 
-  const result = await updateLedgerRow(
-    effectiveIntent.rowNumber,
-    rowInput,
-    roomMembers
+  await updateLedgerRow(effectiveIntent.rowNumber, rowInput, roomMembers);
+  return buildExpenseSuccessMessage(
+    effectiveIntent.item,
+    effectiveIntent.amount,
+    wantsRoomSplit,
+    settlement.balances,
+    "update",
+    effectiveIntent.rowNumber
   );
-  const balanceSummary = formatBalances(settlement.balances);
-  return `Da cap nhat dong ${result.rowNumber} trong sheet "${result.sheetName}".${
-    balanceSummary ? `\nSettlement: ${balanceSummary}` : ""
-  }\n${formatIntentJson(effectiveIntent)}`;
 }

@@ -1,3 +1,5 @@
+import type { DebtTransferEntryType } from "./parseDebtTransferMessage";
+
 export type ExpenseSplitMode = "none" | "all_room";
 
 export type ExpenseSettlement = {
@@ -45,21 +47,34 @@ export function computeAllRoomSettlement(
   };
 }
 
-export function computeRecipientCreditSettlement(
+export function computeDebtTransferSettlement(
   members: string[],
-  recipientName: string,
-  totalPaid: number
+  fromMember: string,
+  toMember: string,
+  totalPaid: number,
+  entryType: DebtTransferEntryType
 ): ExpenseSettlement {
   if (!Number.isInteger(totalPaid) || totalPaid <= 0) {
     throw new Error("Tong tien phai la so nguyen duong.");
   }
 
-  if (!members.includes(recipientName)) {
-    throw new Error(`Nguoi nhan tien "${recipientName}" khong co trong phong.`);
+  if (!members.includes(fromMember)) {
+    throw new Error(`Nguoi gui tien "${fromMember}" khong co trong phong.`);
+  }
+
+  if (!members.includes(toMember)) {
+    throw new Error(`Nguoi nhan tien "${toMember}" khong co trong phong.`);
   }
 
   const balances = createEmptyBalances(members);
-  balances[recipientName] = totalPaid;
+
+  if (entryType === "debt") {
+    balances[fromMember] = totalPaid;
+    balances[toMember] = -totalPaid;
+  } else {
+    balances[fromMember] = -totalPaid;
+    balances[toMember] = totalPaid;
+  }
 
   return {
     splitMode: "none",

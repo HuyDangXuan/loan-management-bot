@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   computeAllRoomSettlement,
-  computeRecipientCreditSettlement,
+  computeDebtTransferSettlement,
   createEmptyBalances,
 } from "../lib/expenseSettlement";
 
@@ -43,15 +43,40 @@ describe("computeAllRoomSettlement", () => {
   });
 });
 
-describe("computeRecipientCreditSettlement", () => {
-  it("credits only the recipient member for debt-style entries", () => {
+describe("computeDebtTransferSettlement", () => {
+  it("maps debt entries as debtor positive and creditor negative", () => {
     expect(
-      computeRecipientCreditSettlement(["Huy", "Vu", "TienAnh"], "Vu", 100000)
+      computeDebtTransferSettlement(
+        ["Huy", "Vu", "TienAnh"],
+        "Huy",
+        "Vu",
+        100000,
+        "debt"
+      )
     ).toEqual({
       splitMode: "none",
       balances: {
-        Huy: null,
-        Vu: 100000,
+        Huy: 100000,
+        Vu: -100000,
+        TienAnh: null,
+      },
+    });
+  });
+
+  it("maps repay entries as payer negative and receiver positive", () => {
+    expect(
+      computeDebtTransferSettlement(
+        ["Huy", "Vu", "TienAnh"],
+        "Huy",
+        "Vu",
+        50000,
+        "repay"
+      )
+    ).toEqual({
+      splitMode: "none",
+      balances: {
+        Huy: -50000,
+        Vu: 50000,
         TienAnh: null,
       },
     });
