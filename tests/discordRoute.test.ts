@@ -208,6 +208,9 @@ describe("POST /api/discord", () => {
     await runDeferredWork();
 
     expect(mocks.generateContentMock).toHaveBeenCalledTimes(3);
+    expect(mocks.generateContentMock.mock.calls[0]?.[0]).toMatchObject({
+      model: "gemini-2.5-flash-lite",
+    });
     expect(getPatchedContent()).toBe("Da xong");
   });
 });

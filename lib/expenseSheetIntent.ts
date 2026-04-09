@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 
 import type { ExpenseSplitMode } from "./expenseSettlement";
+import { getGeminiModel } from "./geminiModel";
 import type { ExpenseMessage } from "./parseExpenseMessage";
 
 export type ExpenseSheetIntent = {
@@ -26,6 +27,7 @@ type InferExpenseSheetIntentInput = {
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
+const geminiModel = getGeminiModel();
 
 function buildPrompt({
   message,
@@ -175,7 +177,7 @@ export async function inferExpenseSheetIntent(
 ): Promise<ExpenseSheetIntent> {
   try {
     const result = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: geminiModel,
       contents: buildPrompt(input),
       config: {
         responseMimeType: "application/json",

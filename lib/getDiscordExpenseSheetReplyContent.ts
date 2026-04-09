@@ -43,9 +43,33 @@ export function shouldAttemptExpenseAction(content: string) {
   );
 }
 
+function extractParticipantCountFromContent(content: string) {
+  const normalized = content.toLowerCase();
+  const slashMatch = normalized.match(/\/\s*(\d+)\b/);
+
+  if (slashMatch) {
+    const slashCount = Number.parseInt(slashMatch[1], 10);
+
+    if (Number.isInteger(slashCount) && slashCount > 0) {
+      return slashCount;
+    }
+  }
+
+  const textMatch = normalized.match(/\bchia\s+(\d+)\b/);
+
+  if (!textMatch) {
+    return null;
+  }
+
+  const textCount = Number.parseInt(textMatch[1], 10);
+  return Number.isInteger(textCount) && textCount > 0 ? textCount : null;
+}
+
 function hasRoomWideSplitCue(content: string) {
-  return /\b(cho ca phong|ca phong|moi nguoi|chia deu|chia\s+\d+)\b/i.test(
-    content.toLowerCase()
+  return (
+    /\b(cho ca phong|ca phong|moi nguoi|chia deu|chia\s+\d+)\b/i.test(
+      content.toLowerCase()
+    ) || extractParticipantCountFromContent(content) !== null
   );
 }
 
@@ -107,36 +131,42 @@ export async function getDiscordExpenseSheetReplyContent(
     senderName: input.discordDisplayName,
     senderUsername: input.discordUsername,
   });
+  const inferredParticipantCount =
+    intent.participantCount ?? extractParticipantCountFromContent(content);
+  const effectiveIntent: ExpenseSheetIntent = {
+    ...intent,
+    participantCount: inferredParticipantCount,
+  };
   const localSplitCue = hasRoomWideSplitCue(content);
 
-  if (intent.action === "noop") {
+  if (effectiveIntent.action === "noop") {
     if (localSplitCue && !roomMembers.length) {
       return buildSetupGuidance();
     }
 
-    return intent.reason
-      ? `Khong xu ly duoc lenh nay.\n${formatIntentJson(intent)}`
+    return effectiveIntent.reason
+      ? `Khong xu ly duoc lenh nay.\n${formatIntentJson(effectiveIntent)}`
       : null;
   }
 
-  if (intent.action === "delete") {
-    if (!intent.rowNumber) {
-      return `Can chi ro dong can xoa.\n${formatIntentJson(intent)}`;
+  if (effectiveIntent.action === "delete") {
+    if (!effectiveIntent.rowNumber) {
+      return `Can chi ro dong can xoa.\n${formatIntentJson(effectiveIntent)}`;
     }
 
-    const result = await deleteLedgerRow(intent.rowNumber);
+    const result = await deleteLedgerRow(effectiveIntent.rowNumber);
     return `Da xoa dong ${result.rowNumber} trong sheet "${result.sheetName}".\n${formatIntentJson(
-      intent
+      effectiveIntent
     )}`;
   }
 
-  if (!intent.amount || !intent.item) {
+  if (!effectiveIntent.amount || !effectiveIntent.item) {
     return `Thieu du lieu amount/item de ghi vao sheet.\n${formatIntentJson(
-      intent
+      effectiveIntent
     )}`;
   }
 
-  const wantsRoomSplit = intent.splitMode === "all_room" || localSplitCue;
+  const wantsRoomSplit = effectiveIntent.splitMode === "all_room" || localSplitCue;
 
   if (wantsRoomSplit && !roomMembers.length) {
     return buildSetupGuidance();
@@ -144,60 +174,70 @@ export async function getDiscordExpenseSheetReplyContent(
 
   if (
     wantsRoomSplit &&
-    intent.participantCount &&
-    intent.participantCount !== roomMembers.length
+    effectiveIntent.participantCount &&
+    effectiveIntent.participantCount !== roomMembers.length
   ) {
     return `Cau lenh chia tien chua ro rang voi phong hien tai.\n${formatIntentJson(
-      intent
+      effectiveIntent
     )}`;
   }
 
   const paidBy = resolvePreferredPayerName(
     roomMembers,
-    intent.payerName,
+    effectiveIntent.payerName,
     input.discordDisplayName,
     input.discordUsername
   );
 
   if (wantsRoomSplit && !paidBy) {
     return `Khong xac dinh duoc ai la nguoi tra tien.\n${formatIntentJson(
-      intent
+      effectiveIntent
     )}`;
   }
 
   const settlement = wantsRoomSplit
-    ? computeAllRoomSettlement(roomMembers, paidBy as string, intent.amount)
+    ? computeAllRoomSettlement(
+        roomMembers,
+        paidBy as string,
+        effectiveIntent.amount
+      )
     : {
         splitMode: "none" as const,
         balances: createEmptyBalances(roomMembers),
       };
 
   const rowInput = {
-    action: (intent.action === "update" ? "update" : "add") as "add" | "update",
+    action: (effectiveIntent.action === "update" ? "update" : "add") as
+      | "add"
+      | "update",
     paidBy,
-    item: intent.item,
-    totalPaid: intent.amount,
+    item: effectiveIntent.item,
+    totalPaid: effectiveIntent.amount,
     splitMode: settlement.splitMode,
-    note: intent.note,
+    note: effectiveIntent.note,
     sourceMessage: content,
     balances: settlement.balances,
   };
 
-  if (intent.action === "add") {
+  if (effectiveIntent.action === "add") {
     const result = await appendLedgerRow(rowInput, roomMembers);
     const balanceSummary = formatBalances(settlement.balances);
     return `Da them dong ${result.rowNumber} vao sheet "${result.sheetName}".${
       balanceSummary ? `\nSettlement: ${balanceSummary}` : ""
-    }\n${formatIntentJson(intent)}`;
+    }\n${formatIntentJson(effectiveIntent)}`;
   }
 
-  if (!intent.rowNumber) {
-    return `Can chi ro dong can sua.\n${formatIntentJson(intent)}`;
+  if (!effectiveIntent.rowNumber) {
+    return `Can chi ro dong can sua.\n${formatIntentJson(effectiveIntent)}`;
   }
 
-  const result = await updateLedgerRow(intent.rowNumber, rowInput, roomMembers);
+  const result = await updateLedgerRow(
+    effectiveIntent.rowNumber,
+    rowInput,
+    roomMembers
+  );
   const balanceSummary = formatBalances(settlement.balances);
   return `Da cap nhat dong ${result.rowNumber} trong sheet "${result.sheetName}".${
     balanceSummary ? `\nSettlement: ${balanceSummary}` : ""
-  }\n${formatIntentJson(intent)}`;
+  }\n${formatIntentJson(effectiveIntent)}`;
 }

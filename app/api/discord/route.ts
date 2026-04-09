@@ -3,6 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 import nacl from "tweetnacl";
 
 import { DISCORD_HELP_TEXT } from "../../../lib/discordHelpText";
+import { getGeminiModel } from "../../../lib/geminiModel";
 import { saveRoomConfig } from "../../../lib/googleSheetsExpenseStore";
 import {
   formatRoomConfigSummary,
@@ -12,6 +13,7 @@ import {
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
+const geminiModel = getGeminiModel();
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -170,7 +172,7 @@ function getGeminiRetryDelayMessage(error: unknown) {
 async function callGemini(prompt: string, retries = 2): Promise<string> {
   try {
     const result = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: geminiModel,
       contents: prompt,
     });
 
