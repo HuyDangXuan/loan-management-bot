@@ -2,7 +2,7 @@ import "dotenv/config";
 
 import { Client, GatewayIntentBits } from "discord.js";
 
-import { getDiscordExpenseReplyContent } from "../lib/getDiscordExpenseReplyContent";
+import { getDiscordExpenseSheetReplyContent } from "../lib/getDiscordExpenseSheetReplyContent";
 
 const botToken = process.env.DISCORD_BOT_TOKEN;
 
@@ -23,18 +23,21 @@ client.once("ready", (readyClient) => {
 });
 
 client.on("messageCreate", async (message) => {
-  const replyContent = getDiscordExpenseReplyContent({
-    content: message.content,
-    inGuild: message.inGuild(),
-    isBot: message.author.bot,
-    isSystem: message.system,
-  });
-
-  if (!replyContent) {
-    return;
-  }
-
   try {
+    const replyContent = await getDiscordExpenseSheetReplyContent({
+      content: message.content,
+      inGuild: message.inGuild(),
+      isBot: message.author.bot,
+      isSystem: message.system,
+      discordUserId: message.author.id,
+      discordUsername: message.author.username,
+      discordDisplayName: message.member?.displayName ?? message.author.globalName,
+    });
+
+    if (!replyContent) {
+      return;
+    }
+
     await message.reply({
       content: replyContent,
       allowedMentions: { repliedUser: false },
