@@ -1,36 +1,77 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Discord Expense Parser Bot
 
-## Getting Started
+Next.js app này gi? webhook `/api/discord` cho slash command `/ask`, d?ng th?i có thêm m?t worker Discord riêng d? b?t tin nh?n thu?ng và tr? JSON khi message kh?p format chi tiêu don gi?n.
 
-First, run the development server:
+## Yêu c?u môi tru?ng
+
+Sao chép `.env.example` thành `.env` và di?n các giá tr? Discord/Gemini c?n thi?t:
+
+```bash
+GEMINI_API_KEY=...
+DISCORD_PUBLIC_KEY=...
+DISCORD_BOT_TOKEN=...
+DISCORD_APPLICATION_ID=...
+DISCORD_GUILD_ID=...
+```
+
+Trên Discord Developer Portal, bot ph?i b?t **Message Content Intent** d? worker d?c du?c n?i dung message thu?ng.
+
+## Ch?y local
+
+Cài dependency:
+
+```bash
+npm install
+```
+
+Ch?y Next.js app:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+M? m?t terminal khác d? ch?y Discord message worker:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run discord:bot
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Ðang ký slash command `/ask` vào guild test:
 
-## Learn More
+```bash
+npm run register:discord
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Hành vi message parser
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Worker s? d?c m?i message thu?ng t? user trong guild channel mà bot nhìn th?y.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Ví d? input:
 
-## Deploy on Vercel
+```text
+100k cafe
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Bot s? reply:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```json
+{
+  "amount": 100000,
+  "item": "cafe"
+}
+```
+
+Các format dang h? tr? ? v1:
+- `100k cafe`
+- `250 cafe sua`
+- `100 K cafe`
+
+N?u message không parse du?c, bot s? im l?ng.
+
+## Ki?m tra
+
+```bash
+npm test
+npm run lint
+npx tsc --noEmit
+```

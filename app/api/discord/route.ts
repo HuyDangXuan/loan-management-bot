@@ -5,6 +5,21 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
+type DiscordCommandOption = {
+  name: string;
+  value?: string | number | boolean;
+};
+
+type DiscordInteractionRequest = {
+  type: number;
+  application_id: string;
+  token: string;
+  data?: {
+    name?: string;
+    options?: DiscordCommandOption[];
+  };
+};
+
 function verifyDiscordRequest(
   body: string,
   signature: string,
@@ -20,14 +35,30 @@ function verifyDiscordRequest(
   );
 }
 
-function getOptionValue(options: any[] | undefined, name: string) {
+function getOptionValue(
+  options: DiscordCommandOption[] | undefined,
+  name: string
+) {
   if (!options) return "";
-  const found = options.find((opt) => opt.name === name);
+  const found = options.find((option) => option.name === name);
   return found?.value ?? "";
 }
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getErrorStatus(error: unknown): number | undefined {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    typeof error.status === "number"
+  ) {
+    return error.status;
+  }
+
+  return undefined;
 }
 
 async function callGemini(prompt: string, retries = 2): Promise<string> {
@@ -38,11 +69,10 @@ async function callGemini(prompt: string, retries = 2): Promise<string> {
     });
 
     return (result.text || "Không có phản hồi.").slice(0, 1900);
-  } catch (error: any) {
-    const status = error?.status;
+  } catch (error: unknown) {
+    const status = getErrorStatus(error);
     console.error("Gemini error:", error);
 
-    // retry cho các lỗi tạm thời
     if ((status === 503 || status === 429 || status === 500) && retries > 0) {
       await sleep(1200);
       return callGemini(prompt, retries - 1);
@@ -103,21 +133,17 @@ export async function POST(req: Request) {
     return new Response("invalid request signature", { status: 401 });
   }
 
-  const body = JSON.parse(rawBody);
+  const body = JSON.parse(rawBody) as DiscordInteractionRequest;
 
-  // Discord PING
   if (body.type === 1) {
     return Response.json({ type: 1 });
   }
 
-  // Slash command
   if (body.type === 2) {
     const commandName = body.data?.name;
 
     if (commandName === "ask") {
-      const prompt = String(
-        getOptionValue(body.data?.options, "prompt") || ""
-      ).trim();
+      const prompt = String(getOptionValue(body.data?.options, "prompt") || "").trim();
 
       if (!prompt) {
         return Response.json({
@@ -128,7 +154,6 @@ export async function POST(req: Request) {
         });
       }
 
-      // Trả ACK ngay cho Discord để tránh timeout
       queueMicrotask(async () => {
         try {
           const text = await callGemini(prompt);
@@ -143,7 +168,6 @@ export async function POST(req: Request) {
         }
       });
 
-      // Deferred response
       return Response.json({
         type: 5,
       });
