@@ -33,6 +33,7 @@ type SpreadsheetSheet = {
     sheetId?: number;
     gridProperties?: {
       frozenRowCount?: number;
+      rowCount?: number;
     };
   };
   conditionalFormats?: unknown[];
@@ -71,6 +72,14 @@ const LEDGER_BAND_2: Color = { red: 0.96, green: 0.97, blue: 0.95 };
 const MEMBER_NEUTRAL_COLOR: Color = { red: 0.97, green: 0.97, blue: 0.97 };
 const MEMBER_POSITIVE_COLOR: Color = { red: 0.87, green: 0.95, blue: 0.89 };
 const MEMBER_NEGATIVE_COLOR: Color = { red: 0.98, green: 0.88, blue: 0.88 };
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+const GOOGLE_SHEETS_SERIAL_DATE_OFFSET = 25569;
+const LEDGER_HEADER_FONT_SIZE = 13;
+const LEDGER_DATA_FONT_SIZE = 12;
+const LEDGER_HEADER_ROW_HEIGHT = 42;
+const LEDGER_DATA_ROW_HEIGHT = 36;
+const LEDGER_TIMESTAMP_PATTERN = "dd/MM HH:mm";
+const LEDGER_COLUMN_WIDTHS = [150, 90, 110, 180, 120, 110, 220, 320] as const;
 
 function getRequiredEnv(name: string) {
   const value = process.env[name]?.trim();
@@ -271,7 +280,7 @@ function toColumnLetter(columnNumber: number) {
 
 function buildLedgerRowValues(headers: string[], input: LedgerRowInput) {
   const fixedValues = [
-    new Date().toISOString(),
+    toGoogleSheetsDateTimeSerial(new Date()),
     input.action,
     input.paidBy ?? "",
     input.item,
@@ -286,6 +295,43 @@ function buildLedgerRowValues(headers: string[], input: LedgerRowInput) {
     .map((member) => toLedgerCellValue(input.balances[member]));
 
   return [...fixedValues, ...memberValues];
+}
+
+function toGoogleSheetsDateTimeSerial(date: Date) {
+  const wallClockTime = Date.UTC(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+    date.getMilliseconds()
+  );
+
+  return wallClockTime / MILLISECONDS_PER_DAY + GOOGLE_SHEETS_SERIAL_DATE_OFFSET;
+}
+
+function buildDimensionSizeRequest(
+  sheetId: number,
+  dimension: "ROWS" | "COLUMNS",
+  startIndex: number,
+  endIndex: number,
+  pixelSize: number
+) {
+  return {
+    updateDimensionProperties: {
+      range: {
+        sheetId,
+        dimension,
+        startIndex,
+        endIndex,
+      },
+      properties: {
+        pixelSize,
+      },
+      fields: "pixelSize",
+    },
+  };
 }
 
 async function syncLedgerHeaders(activeMembers: string[]) {
@@ -450,6 +496,7 @@ async function applyLedgerSheetFormatting(totalColumnCount: number) {
   await deleteExistingBanding(sheet);
 
   const memberStartColumn = LEDGER_FIXED_HEADERS.length;
+  const rowCount = Math.max(sheet.properties?.gridProperties?.rowCount ?? 1000, 2);
   const requests: unknown[] = [
     {
       updateSheetProperties: {
@@ -462,6 +509,8 @@ async function applyLedgerSheetFormatting(totalColumnCount: number) {
         fields: "gridProperties.frozenRowCount",
       },
     },
+    buildDimensionSizeRequest(sheetId, "ROWS", 0, 1, LEDGER_HEADER_ROW_HEIGHT),
+    buildDimensionSizeRequest(sheetId, "ROWS", 1, rowCount, LEDGER_DATA_ROW_HEIGHT),
     {
       repeatCell: {
         range: {
@@ -474,10 +523,31 @@ async function applyLedgerSheetFormatting(totalColumnCount: number) {
             backgroundColor: LEDGER_HEADER_COLOR,
             textFormat: {
               bold: true,
+              fontSize: LEDGER_HEADER_FONT_SIZE,
             },
+            verticalAlignment: "MIDDLE",
           },
         },
-        fields: "userEnteredFormat(backgroundColor,textFormat.bold)",
+        fields:
+          "userEnteredFormat(backgroundColor,textFormat.bold,textFormat.fontSize,verticalAlignment)",
+      },
+    },
+    {
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: 1,
+        },
+        cell: {
+          userEnteredFormat: {
+            textFormat: {
+              fontSize: LEDGER_DATA_FONT_SIZE,
+            },
+            verticalAlignment: "MIDDLE",
+            wrapStrategy: "CLIP",
+          },
+        },
+        fields: "userEnteredFormat(textFormat.fontSize,verticalAlignment,wrapStrategy)",
       },
     },
     {
@@ -502,18 +572,86 @@ async function applyLedgerSheetFormatting(totalColumnCount: number) {
         range: {
           sheetId,
           startRowIndex: 1,
+          startColumnIndex: 0,
+          endColumnIndex: 1,
+        },
+        cell: {
+          userEnteredFormat: {
+            numberFormat: {
+              type: "DATE_TIME",
+              pattern: LEDGER_TIMESTAMP_PATTERN,
+            },
+          },
+        },
+        fields: "userEnteredFormat.numberFormat",
+      },
+    },
+    {
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: 1,
           startColumnIndex: 4,
           endColumnIndex: 5,
         },
         cell: {
           userEnteredFormat: {
+            horizontalAlignment: "RIGHT",
             numberFormat: {
               type: "NUMBER",
               pattern: "#,##0 \"VND\"",
             },
           },
         },
-        fields: "userEnteredFormat.numberFormat",
+        fields: "userEnteredFormat(horizontalAlignment,numberFormat)",
+      },
+    },
+    {
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: 1,
+          startColumnIndex: 1,
+          endColumnIndex: 2,
+        },
+        cell: {
+          userEnteredFormat: {
+            horizontalAlignment: "CENTER",
+          },
+        },
+        fields: "userEnteredFormat.horizontalAlignment",
+      },
+    },
+    {
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: 1,
+          startColumnIndex: 2,
+          endColumnIndex: 3,
+        },
+        cell: {
+          userEnteredFormat: {
+            horizontalAlignment: "CENTER",
+          },
+        },
+        fields: "userEnteredFormat.horizontalAlignment",
+      },
+    },
+    {
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: 1,
+          startColumnIndex: 5,
+          endColumnIndex: 6,
+        },
+        cell: {
+          userEnteredFormat: {
+            horizontalAlignment: "CENTER",
+          },
+        },
+        fields: "userEnteredFormat.horizontalAlignment",
       },
     },
     {
@@ -532,20 +670,27 @@ async function applyLedgerSheetFormatting(totalColumnCount: number) {
         fields: "userEnteredFormat.wrapStrategy",
       },
     },
-    {
-      autoResizeDimensions: {
-        dimensions: {
-          sheetId,
-          dimension: "COLUMNS",
-          startIndex: 0,
-          endIndex: totalColumnCount,
-        },
-      },
-    },
+    ...LEDGER_COLUMN_WIDTHS.map((pixelSize, index) =>
+      buildDimensionSizeRequest(sheetId, "COLUMNS", index, index + 1, pixelSize)
+    ),
   ];
 
   if (totalColumnCount > memberStartColumn) {
     requests.push(
+      {
+        updateDimensionProperties: {
+          range: {
+            sheetId,
+            dimension: "COLUMNS",
+            startIndex: memberStartColumn,
+            endIndex: totalColumnCount,
+          },
+          properties: {
+            pixelSize: 110,
+          },
+          fields: "pixelSize",
+        },
+      },
       {
         repeatCell: {
           range: {
@@ -557,13 +702,14 @@ async function applyLedgerSheetFormatting(totalColumnCount: number) {
           cell: {
             userEnteredFormat: {
               backgroundColor: MEMBER_NEUTRAL_COLOR,
+              horizontalAlignment: "RIGHT",
               numberFormat: {
                 type: "NUMBER",
                 pattern: "#,##0",
               },
             },
           },
-          fields: "userEnteredFormat(backgroundColor,numberFormat)",
+          fields: "userEnteredFormat(backgroundColor,horizontalAlignment,numberFormat)",
         },
       },
       {
@@ -676,7 +822,7 @@ export async function appendLedgerRow(
   activeMembers: string[]
 ): Promise<LedgerMutationResult> {
   const headers = await ensureRoomSheetsReady(activeMembers);
-  const payload = await appendSheetValues(getLedgerSheetName(), [
+  const payload = await appendSheetValues(`${getLedgerSheetName()}!A1`, [
     buildLedgerRowValues(headers, input),
   ]);
   const rowNumber = parseUpdatedRangeRowNumber(payload.updates?.updatedRange);
