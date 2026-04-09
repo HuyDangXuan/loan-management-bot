@@ -44,3 +44,25 @@ export function computeAllRoomSettlement(
     balances,
   };
 }
+
+export function computeRecipientCreditSettlement(
+  members: string[],
+  recipientName: string,
+  totalPaid: number
+): ExpenseSettlement {
+  if (!Number.isInteger(totalPaid) || totalPaid <= 0) {
+    throw new Error("Tong tien phai la so nguyen duong.");
+  }
+
+  if (!members.includes(recipientName)) {
+    throw new Error(`Nguoi nhan tien "${recipientName}" khong co trong phong.`);
+  }
+
+  const balances = createEmptyBalances(members);
+  balances[recipientName] = totalPaid;
+
+  return {
+    splitMode: "none",
+    balances,
+  };
+}

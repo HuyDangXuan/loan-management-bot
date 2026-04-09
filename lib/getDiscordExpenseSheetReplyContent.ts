@@ -1,5 +1,6 @@
 import {
   computeAllRoomSettlement,
+  computeRecipientCreditSettlement,
   createEmptyBalances,
 } from "./expenseSettlement";
 import {
@@ -12,6 +13,10 @@ import {
   inferExpenseSheetIntent,
   type ExpenseSheetIntent,
 } from "./expenseSheetIntent";
+import {
+  hasDebtTransferCue,
+  parseDebtTransferMessage,
+} from "./parseDebtTransferMessage";
 import { parseExpenseMessage } from "./parseExpenseMessage";
 import { resolveRoomMemberName } from "./roomConfig";
 
@@ -25,12 +30,33 @@ export type DiscordExpenseSheetMessageInput = {
   discordDisplayName: string | null;
 };
 
+function buildNoopIntent(
+  reason: string,
+  overrides: Partial<ExpenseSheetIntent> = {}
+): ExpenseSheetIntent {
+  return {
+    action: "noop",
+    entryType: "expense",
+    rowNumber: null,
+    amount: null,
+    item: null,
+    payerName: null,
+    fromMember: null,
+    toMember: null,
+    splitMode: "none",
+    participantCount: null,
+    note: null,
+    reason,
+    ...overrides,
+  };
+}
+
 export function shouldAttemptExpenseAction(content: string) {
   const normalized = content.toLowerCase();
   const hasMoneyAmount =
     /\b\d+\s*(k|nghin|ngan|tr|trieu|cu|d|vnd|dong)?\b/i.test(normalized);
   const hasExpenseCue =
-    /\b(mua|chi|tra|thanh toan|bill|tien|an|uong|cafe|com|pho|bun|thit|rau|ship|chia|share|split)\b/i.test(
+    /\b(mua|chi|tra|thanh toan|bill|tien|an|uong|cafe|com|pho|bun|thit|rau|ship|chia|share|split|no|thieu|chuyen|hoan)\b/i.test(
       normalized
     );
   const hasRowAction =
@@ -39,6 +65,7 @@ export function shouldAttemptExpenseAction(content: string) {
   return (
     parseExpenseMessage(content) !== null ||
     hasRowAction ||
+    hasDebtTransferCue(content) ||
     (hasMoneyAmount && hasExpenseCue)
   );
 }
@@ -104,7 +131,7 @@ function resolvePreferredPayerName(
 
 function buildSetupGuidance() {
   return (
-    "Can cau hinh phong truoc khi chia tien. Dung /start so_nguoi:<n> thanh_vien:\"Huy, Lan, Minh\"."
+    'Can cau hinh phong truoc khi chia tien. Dung /start so_nguoi:<n> thanh_vien:"Huy, Lan, Minh".'
   );
 }
 
@@ -123,10 +150,28 @@ export async function getDiscordExpenseSheetReplyContent(
 
   const roomConfig = await getRoomConfig();
   const roomMembers = roomConfig?.members ?? [];
+
+  if (hasDebtTransferCue(content) && !roomMembers.length) {
+    return buildSetupGuidance();
+  }
+
+  const parsedDebtTransfer = parseDebtTransferMessage(content, roomMembers);
+
+  if (parsedDebtTransfer?.kind === "invalid") {
+    return `Khong xu ly duoc lenh nay.\n${formatIntentJson(
+      buildNoopIntent(parsedDebtTransfer.reason, {
+        entryType: parsedDebtTransfer.entryType,
+      })
+    )}`;
+  }
+
+  const matchedDebtTransfer =
+    parsedDebtTransfer?.kind === "matched" ? parsedDebtTransfer : null;
   const parsedExpense = parseExpenseMessage(content);
   const intent = await inferExpenseSheetIntent({
     message: content,
     parsedExpense,
+    parsedDebtTransfer: matchedDebtTransfer,
     roomMembers,
     senderName: input.discordDisplayName,
     senderUsername: input.discordUsername,
@@ -135,7 +180,19 @@ export async function getDiscordExpenseSheetReplyContent(
     intent.participantCount ?? extractParticipantCountFromContent(content);
   const effectiveIntent: ExpenseSheetIntent = {
     ...intent,
+    action:
+      matchedDebtTransfer && intent.action !== "update" && intent.action !== "delete"
+        ? "add"
+        : intent.action,
+    entryType: matchedDebtTransfer?.entryType ?? intent.entryType,
+    amount: matchedDebtTransfer?.amount ?? intent.amount,
+    item: matchedDebtTransfer ? matchedDebtTransfer.entryType : intent.item,
+    payerName: matchedDebtTransfer?.toMember ?? intent.payerName,
+    fromMember: matchedDebtTransfer?.fromMember ?? intent.fromMember,
+    toMember: matchedDebtTransfer?.toMember ?? intent.toMember,
+    splitMode: matchedDebtTransfer ? "none" : intent.splitMode,
     participantCount: inferredParticipantCount,
+    note: matchedDebtTransfer?.note ?? intent.note,
   };
   const localSplitCue = hasRoomWideSplitCue(content);
 
@@ -158,6 +215,67 @@ export async function getDiscordExpenseSheetReplyContent(
     return `Da xoa dong ${result.rowNumber} trong sheet "${result.sheetName}".\n${formatIntentJson(
       effectiveIntent
     )}`;
+  }
+
+  if (
+    effectiveIntent.entryType === "debt" ||
+    effectiveIntent.entryType === "repay"
+  ) {
+    const fromMember = resolveRoomMemberName(
+      roomMembers,
+      effectiveIntent.fromMember
+    );
+    const toMember = resolveRoomMemberName(roomMembers, effectiveIntent.toMember);
+
+    if (!effectiveIntent.amount || !fromMember || !toMember || fromMember === toMember) {
+      const invalidDebtIntent = {
+        ...effectiveIntent,
+        action: "noop" as const,
+        reason: "Lenh cong no/tra no phai ghi ro 2 thanh vien trong room.",
+      };
+
+      return `Khong xu ly duoc lenh nay.\n${formatIntentJson(invalidDebtIntent)}`;
+    }
+
+    const settlement = computeRecipientCreditSettlement(
+      roomMembers,
+      toMember,
+      effectiveIntent.amount
+    );
+    const rowInput = {
+      action: (effectiveIntent.action === "update" ? "update" : "add") as
+        | "add"
+        | "update",
+      paidBy: toMember,
+      item: effectiveIntent.entryType,
+      totalPaid: effectiveIntent.amount,
+      splitMode: settlement.splitMode,
+      note: effectiveIntent.note ?? `${fromMember} -> ${toMember}`,
+      sourceMessage: content,
+      balances: settlement.balances,
+    };
+
+    if (effectiveIntent.action === "add") {
+      const result = await appendLedgerRow(rowInput, roomMembers);
+      const balanceSummary = formatBalances(settlement.balances);
+      return `Da them dong ${result.rowNumber} vao sheet "${result.sheetName}".${
+        balanceSummary ? `\nSettlement: ${balanceSummary}` : ""
+      }\n${formatIntentJson(effectiveIntent)}`;
+    }
+
+    if (!effectiveIntent.rowNumber) {
+      return `Can chi ro dong can sua.\n${formatIntentJson(effectiveIntent)}`;
+    }
+
+    const result = await updateLedgerRow(
+      effectiveIntent.rowNumber,
+      rowInput,
+      roomMembers
+    );
+    const balanceSummary = formatBalances(settlement.balances);
+    return `Da cap nhat dong ${result.rowNumber} trong sheet "${result.sheetName}".${
+      balanceSummary ? `\nSettlement: ${balanceSummary}` : ""
+    }\n${formatIntentJson(effectiveIntent)}`;
   }
 
   if (!effectiveIntent.amount || !effectiveIntent.item) {

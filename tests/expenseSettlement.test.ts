@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   computeAllRoomSettlement,
+  computeRecipientCreditSettlement,
   createEmptyBalances,
 } from "../lib/expenseSettlement";
 
@@ -39,5 +40,20 @@ describe("computeAllRoomSettlement", () => {
         },
       }
     );
+  });
+});
+
+describe("computeRecipientCreditSettlement", () => {
+  it("credits only the recipient member for debt-style entries", () => {
+    expect(
+      computeRecipientCreditSettlement(["Huy", "Vu", "TienAnh"], "Vu", 100000)
+    ).toEqual({
+      splitMode: "none",
+      balances: {
+        Huy: null,
+        Vu: 100000,
+        TienAnh: null,
+      },
+    });
   });
 });

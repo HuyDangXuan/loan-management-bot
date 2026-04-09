@@ -22,10 +22,13 @@ describe("inferExpenseSheetIntent", () => {
     mocks.generateContentMock.mockResolvedValue({
       text: JSON.stringify({
         action: "add",
+        entryType: "expense",
         rowNumber: null,
         amount: 120000,
         item: "cafe",
         payerName: "Huy",
+        fromMember: null,
+        toMember: null,
         splitMode: "none",
         participantCount: null,
         note: null,
@@ -39,6 +42,7 @@ describe("inferExpenseSheetIntent", () => {
     await inferExpenseSheetIntent({
       message: "120k cafe",
       parsedExpense: { amount: 120000, item: "cafe" },
+      parsedDebtTransfer: null,
       roomMembers: ["Huy", "Vu"],
       senderName: "Huy",
       senderUsername: "huy",

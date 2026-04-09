@@ -13,6 +13,11 @@ describe("shouldAttemptExpenseAction", () => {
     );
   });
 
+  it("matches debt and repay commands", () => {
+    expect(shouldAttemptExpenseAction("huy no vu 100k")).toBe(true);
+    expect(shouldAttemptExpenseAction("huy tra cho vu 100k")).toBe(true);
+  });
+
   it("still matches row-based update commands", () => {
     expect(shouldAttemptExpenseAction("sua dong 4 thanh 120k com")).toBe(true);
   });
